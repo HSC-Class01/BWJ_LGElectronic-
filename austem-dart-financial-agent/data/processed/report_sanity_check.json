@@ -1,0 +1,16 @@
+{
+  "company": "오스템",
+  "stock_code": "036560",
+  "business_year": 2025,
+  "basis_default": "CFS",
+  "sanity_check_from_attached_report": {
+    "revenue_mn_krw": 128549,
+    "operating_income_mn_krw": 4148,
+    "pretax_income_mn_krw": 1815,
+    "net_income_mn_krw": 803,
+    "assets_mn_krw": 131603,
+    "liabilities_mn_krw": 65311,
+    "equity_mn_krw": 66292
+  },
+  "note": "This is a report-based sanity-check fixture, not a substitute for the live OpenDART API output."
+}

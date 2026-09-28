@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AUSTEM DART Financial Dashboard</title>
+<style>
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f9;color:#17202a}
+header{background:#111827;color:white;padding:28px 5vw}
+main{max-width:1200px;margin:24px auto;padding:0 20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+.card{background:white;border-radius:14px;padding:18px;box-shadow:0 2px 12px #00000012}
+.label{font-size:13px;color:#6b7280}.value{font-size:28px;font-weight:700;margin-top:8px}
+.section{margin:24px 0}.muted{color:#6b7280;font-size:13px}
+table{width:100%;border-collapse:collapse;background:white;border-radius:12px;overflow:hidden}
+th,td{padding:11px;border-bottom:1px solid #e5e7eb;text-align:right}th:first-child,td:first-child{text-align:left}
+.badge{display:inline-block;padding:5px 9px;border-radius:999px;background:#eef2ff;font-size:12px}
+.error{color:#b91c1c;background:#fee2e2;padding:15px;border-radius:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1>AUSTEM 재무 Dashboard</h1>
+  <div id="meta">DART 데이터 로딩 중...</div>
+</header>
+<main>
+  <div id="error"></div>
+  <section class="section">
+    <h2>핵심 재무수치 (연결)</h2>
+    <div id="cards" class="grid"></div>
+  </section>
+  <section class="section">
+    <h2>주요 재무비율</h2>
+    <div id="ratios" class="grid"></div>
+  </section>
+  <section class="section">
+    <h2>수치 상세</h2>
+    <table>
+      <thead><tr><th>항목</th><th>당기</th><th>전기</th><th>증감</th></tr></thead>
+      <tbody id="detail"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+const fmt = v => v == null ? "—" : new Intl.NumberFormat("ko-KR",{maximumFractionDigits:1}).format(v);
+const pct = v => v == null ? "—" : `${v.toFixed(2)}%`;
+const labels = {
+  revenue:"매출액", operating_income:"영업이익", pretax_income:"법인세차감전순이익",
+  net_income:"당기순이익", assets:"자산총계", liabilities:"부채총계",
+  equity:"자본총계", cash:"현금및현금성자산", current_assets:"유동자산",
+  current_liabilities:"유동부채", inventory:"재고자산"
+};
+const ratioLabels = {
+  operating_margin_pct:"영업이익률", net_margin_pct:"순이익률",
+  current_ratio_pct:"유동비율", debt_to_equity_pct:"부채비율",
+  equity_ratio_pct:"자기자본비율", cash_ratio_pct:"현금비율",
+  roa_pct:"ROA", roe_pct:"ROE",
+  revenue_growth_pct:"매출증가율", operating_income_growth_pct:"영업이익증가율"
+};
+fetch("../data/processed/dashboard.json?ts="+Date.now())
+.then(r=>r.json())
+.then(d=>{
+  const c=d.metrics[d.basis_default||"CFS"];
+  document.getElementById("meta").innerHTML =
+    `<span class="badge">${d.business_year} 사업연도</span> `+
+    `보고서 접수일 ${d.receipt_date||"—"} · 접수번호 ${d.receipt_no||"—"} · 기준 ${d.basis_default}`;
+  const keyCards=["revenue","operating_income","net_income","assets","liabilities","equity","cash"];
+  document.getElementById("cards").innerHTML=keyCards.map(k=>`
+    <div class="card"><div class="label">${labels[k]}</div>
+    <div class="value">${fmt(c.values[k].current)}</div>
+    <div class="muted">단위: OpenDART API 제공 단위</div></div>`).join("");
+  document.getElementById("ratios").innerHTML=Object.entries(c.ratios).map(([k,v])=>`
+    <div class="card"><div class="label">${ratioLabels[k]||k}</div>
+    <div class="value">${pct(v)}</div></div>`).join("");
+  document.getElementById("detail").innerHTML=Object.entries(c.values).map(([k,v])=>{
+    const ch=(v.current!=null&&v.prior!=null&&v.prior!==0)?((v.current-v.prior)/Math.abs(v.prior))*100:null;
+    return `<tr><td>${labels[k]||k}</td><td>${fmt(v.current)}</td><td>${fmt(v.prior)}</td><td>${pct(ch)}</td></tr>`;
+  }).join("");
+})
+.catch(e=>{
+  document.getElementById("error").innerHTML =
+    `<div class="error">데이터를 불러오지 못했습니다. 먼저 GitHub Actions에서 DART agent를 실행해 주세요.<br>${e}</div>`;
+});
+</script>
+</body>
+</html>
