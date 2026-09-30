@@ -1,0 +1,39 @@
+{
+  "company_name": "LG전자",
+  "company_name_en": "LG Electronics",
+  "stock_code": "066570",
+  "dart_base_url": "https://opendart.fss.or.kr/api",
+  "start_year": 2010,
+  "default_basis": "CFS",
+  "currency_unit": "KRW million",
+  "report_codes": {
+    "annual": "11011",
+    "half_year": "11012",
+    "quarterly_q1": "11013",
+    "quarterly_q3": "11014"
+  },
+  "metrics": [
+    "revenue",
+    "operating_income",
+    "pretax_income",
+    "net_income",
+    "assets",
+    "current_assets",
+    "cash",
+    "inventory",
+    "liabilities",
+    "current_liabilities",
+    "equity",
+    "controlling_equity",
+    "operating_margin",
+    "net_margin",
+    "current_ratio",
+    "debt_to_equity",
+    "equity_ratio",
+    "cash_ratio",
+    "roa",
+    "roe",
+    "revenue_growth",
+    "operating_income_growth"
+  ]
+}
