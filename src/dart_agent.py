@@ -1,312 +1,160 @@
-import io
-import json
-import os
-import re
-import zipfile
+import io, json, os, re, zipfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-
 import pandas as pd
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-API_KEY = os.environ.get("DART_API_KEY")
-
+CFG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+KEY = os.environ.get("DART_API_KEY")
 RAW = ROOT / "data" / "raw"
-PROCESSED = ROOT / "data" / "processed"
+PROC = ROOT / "data" / "processed"
+LEGACY = ROOT / "legacy"
 RAW.mkdir(parents=True, exist_ok=True)
-PROCESSED.mkdir(parents=True, exist_ok=True)
-
-if not API_KEY:
-    raise RuntimeError("DART_API_KEY 환경변수가 없습니다.")
-
-BASE = CONFIG["dart_base_url"]
-STOCK_CODE = CONFIG["stock_code"]
-REPORT_CODE = CONFIG["report_code"]
-
+PROC.mkdir(parents=True, exist_ok=True)
+BASE = CFG["dart_base_url"]
+STOCK = CFG["stock_code"]
+START = max(2015, int(CFG.get("start_year", 2015)))
+CODES = CFG["report_codes"]
 KST = timezone(timedelta(hours=9))
 
+if not KEY:
+    raise RuntimeError("DART_API_KEY 환경변수가 없습니다.")
 
-def api_get(endpoint, params):
-    params = dict(params)
-    params["crtfc_key"] = API_KEY
-    url = f"{BASE}/{endpoint}"
-    r = requests.get(url, params=params, timeout=60)
+def api(endpoint, params):
+    p = dict(params)
+    p["crtfc_key"] = KEY
+    r = requests.get(f"{BASE}/{endpoint}", params=p, timeout=60)
     r.raise_for_status()
-    return r
-
-
-def json_api(endpoint, params):
-    data = api_get(endpoint, params).json()
-    if str(data.get("status")) != "000":
+    data = r.json() if endpoint.endswith(".json") else None
+    if data is not None and str(data.get("status")) != "000":
         raise RuntimeError(f"{endpoint}: {data.get('status')} {data.get('message')}")
-    return data
+    return r if data is None else data
 
-
-def resolve_corp_code():
-    # OpenDART corpCode API returns a ZIP containing CORPCODE.xml.
-    r = api_get("corpCode.xml", {})
+def resolve_corp():
+    r = api("corpCode.xml", {})
     with zipfile.ZipFile(io.BytesIO(r.content)) as z:
         xml = z.read("CORPCODE.xml").decode("utf-8")
-    rows = re.findall(
-        r"<list>.*?<corp_code>(.*?)</corp_code>.*?<corp_name>(.*?)</corp_name>.*?"
-        r"<stock_code>(.*?)</stock_code>.*?</list>",
-        xml,
-        flags=re.S,
-    )
-    for corp_code, corp_name, stock_code in rows:
-        if stock_code.strip() == STOCK_CODE:
-            return corp_code.strip(), corp_name.strip()
-    raise RuntimeError(f"stock_code={STOCK_CODE}에 해당하는 corp_code를 찾지 못했습니다.")
+    for m in re.finditer(r"<list>(.*?)</list>", xml, re.S):
+        block = m.group(1)
+        stock = re.search(r"<stock_code>(.*?)</stock_code>", block, re.S)
+        if stock and stock.group(1).strip() == STOCK:
+            corp = re.search(r"<corp_code>(.*?)</corp_code>", block, re.S)
+            name = re.search(r"<corp_name>(.*?)</corp_name>", block, re.S)
+            return corp.group(1).strip(), name.group(1).strip()
+    raise RuntimeError("LG전자(066570) corp_code를 찾지 못했습니다.")
 
+def period_name(code):
+    return {"11011":"annual", "11012":"half_year", "11013":"quarterly_q1", "11014":"quarterly_q3"}[code]
 
-def find_latest_annual_report(corp_code):
-    now = datetime.now(KST)
-    start_year = now.year - 2
-    data = json_api(
-        "list.json",
-        {
-            "corp_code": corp_code,
-            "bgn_de": f"{start_year}0101",
-            "end_de": now.strftime("%Y%m%d"),
-            "pblntf_ty": "A",
-            "page_count": 100,
-        },
-    )
-    candidates = []
-    for item in data.get("list", []):
-        report_nm = item.get("report_nm", "")
-        # Annual report names normally contain "사업보고서".
-        if "사업보고서" in report_nm:
-            candidates.append(item)
-    if not candidates:
-        raise RuntimeError("최근 사업보고서를 찾지 못했습니다.")
-    candidates.sort(key=lambda x: x.get("rcept_dt", ""), reverse=True)
-    return candidates[0]
-
-
-def download_original_document(rcept_no):
-    r = api_get("document.xml", {"rcept_no": rcept_no})
-    # document.xml is a binary ZIP response despite the .xml endpoint name.
-    out = RAW / f"{rcept_no}_original.zip"
-    out.write_bytes(r.content)
-    return out
-
-
-def fetch_financials(corp_code, bsns_year, fs_div):
-    data = json_api(
-        "fnlttSinglAcntAll.json",
-        {
-            "corp_code": corp_code,
-            "bsns_year": str(bsns_year),
-            "reprt_code": REPORT_CODE,
-            "fs_div": fs_div,
-        },
-    )
-    rows = data.get("list", [])
-    df = pd.DataFrame(rows)
+def fetch_financials(corp, year, code):
+    data = api("fnlttSinglAcntAll.json", {
+        "corp_code": corp, "bsns_year": str(year),
+        "reprt_code": code, "fs_div": CFG.get("default_basis", "CFS")
+    })
+    df = pd.DataFrame(data.get("list", []))
     if not df.empty:
-        df.to_csv(
-            RAW / f"{STOCK_CODE}_{bsns_year}_{REPORT_CODE}_{fs_div}_financials.csv",
-            index=False,
-            encoding="utf-8-sig",
-        )
+        df.to_csv(RAW / f"{STOCK}_{year}_{period_name(code)}_CFS.csv",
+                  index=False, encoding="utf-8-sig")
     return df
 
-
-def numeric(v):
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return None
-    s = str(v).replace(",", "").strip()
-    if s in ("", "-", "nan", "None"):
+def num(v):
+    if v is None or str(v).strip() in ("", "-", "nan", "None"):
         return None
     try:
-        return float(s)
-    except ValueError:
+        return float(str(v).replace(",", ""))
+    except (TypeError, ValueError):
         return None
 
+MAP = {
+ "revenue":["매출액","수익(매출액)","영업수익"],
+ "operating_income":["영업이익","영업이익(손실)","영업손익"],
+ "pretax_income":["법인세차감전순이익","법인세비용차감전순이익"],
+ "net_income":["당기순이익","당기순이익(손실)"],
+ "assets":["자산총계"], "current_assets":["유동자산"],
+ "cash":["현금및현금성자산","현금 및 현금성자산"],
+ "inventory":["재고자산"], "liabilities":["부채총계"],
+ "current_liabilities":["유동부채"], "equity":["자본총계"],
+ "controlling_equity":["지배기업의 소유주에게 귀속되는 자본","지배기업 소유주지분"]
+}
 
-def pick(df, account_names, sj_div=None):
-    if df.empty:
-        return None
-    x = df.copy()
-    if sj_div:
-        x = x[x["sj_div"].astype(str).str.upper() == sj_div]
-    for name in account_names:
-        exact = x[x["account_nm"].astype(str).str.strip() == name]
-        if not exact.empty:
-            # Prefer current-period value.
-            row = exact.iloc[0]
-            for col in ("thstrm_amount", "thstrm_add_amount", "thstrm_dt"):
-                if col in row.index:
-                    val = numeric(row[col])
-                    if val is not None:
-                        return val
-    return None
-
-
-def pick_current_and_prior(df, account_names, sj_div=None):
-    if df.empty:
+def pick(df, names):
+    if df.empty or "account_nm" not in df.columns:
         return None, None
-    x = df.copy()
-    if sj_div:
-        x = x[x["sj_div"].astype(str).str.upper() == sj_div]
-    for name in account_names:
-        exact = x[x["account_nm"].astype(str).str.strip() == name]
-        if not exact.empty:
-            row = exact.iloc[0]
-            cur = numeric(row.get("thstrm_amount"))
-            prior = numeric(row.get("frmtrm_amount"))
-            return cur, prior
+    for name in names:
+        x = df[df["account_nm"].astype(str).str.strip() == name]
+        if not x.empty:
+            row = x.iloc[0]
+            return num(row.get("thstrm_amount")), num(row.get("frmtrm_amount"))
     return None, None
 
+def pct(a, b):
+    return None if a is None or b in (None, 0) else a / b * 100
 
-def ratio(a, b):
-    if a is None or b in (None, 0):
-        return None
-    return a / b
-
-
-def pct(a):
-    return None if a is None else a * 100.0
-
-
-def build_snapshot(df_cfs, df_ofs, year, filing):
-    # fnlttSinglAcntAll amounts are reported in the unit specified by the API response.
-    # For this project the dashboard keeps the API unit and labels it explicitly.
-    metrics = {}
-
-    mapping = {
-        "revenue": ["매출액", "수익(매출액)", "영업수익"],
-        "operating_income": ["영업이익", "영업이익(손실)", "영업손익"],
-        "pretax_income": ["법인세차감전순이익", "법인세비용차감전순이익"],
-        "net_income": ["당기순이익", "당기순이익(손실)"],
-        "assets": ["자산총계"],
-        "current_assets": ["유동자산"],
-        "cash": ["현금및현금성자산", "현금 및 현금성자산"],
-        "inventory": ["재고자산"],
-        "liabilities": ["부채총계"],
-        "current_liabilities": ["유동부채"],
-        "equity": ["자본총계"],
-        "controlling_equity": ["지배기업의 소유주에게 귀속되는 자본", "지배기업 소유주지분"],
+def snapshot(df, year, code):
+    pairs = {k: pick(df, n) for k, n in MAP.items()}
+    cur = {k:v[0] for k,v in pairs.items()}
+    prior = {k:v[1] for k,v in pairs.items()}
+    avg_assets = ((cur["assets"] + prior["assets"]) / 2
+                  if cur["assets"] is not None and prior["assets"] is not None else cur["assets"])
+    ce, pe = cur["controlling_equity"] or cur["equity"], prior["controlling_equity"] or prior["equity"]
+    avg_eq = (ce + pe) / 2 if ce is not None and pe is not None else ce
+    ratios = {
+      "operating_margin": pct(cur["operating_income"], cur["revenue"]),
+      "net_margin": pct(cur["net_income"], cur["revenue"]),
+      "current_ratio": pct(cur["current_assets"], cur["current_liabilities"]),
+      "debt_to_equity": pct(cur["liabilities"], cur["equity"]),
+      "equity_ratio": pct(cur["equity"], cur["assets"]),
+      "cash_ratio": pct(cur["cash"], cur["current_liabilities"]),
+      "roa": pct(cur["net_income"], avg_assets),
+      "roe": pct(cur["net_income"], avg_eq),
+      "revenue_growth": pct(cur["revenue"] - prior["revenue"], abs(prior["revenue"]))
+          if cur["revenue"] is not None and prior["revenue"] not in (None,0) else None,
+      "operating_income_growth": pct(cur["operating_income"] - prior["operating_income"], abs(prior["operating_income"]))
+          if cur["operating_income"] is not None and prior["operating_income"] not in (None,0) else None
     }
+    return {"year":year, "period":period_name(code), "report_code":code,
+            "fs_div":CFG.get("default_basis","CFS"), "values":cur,
+            "prior_values":prior, "ratios":ratios}
 
-    # CFS = consolidated, OFS = separate.
-    for basis, df in (("CFS", df_cfs), ("OFS", df_ofs)):
-        vals = {}
-        for key, names in mapping.items():
-            cur, prior = pick_current_and_prior(df, names)
-            vals[key] = {"current": cur, "prior": prior}
-
-        rev = vals["revenue"]["current"]
-        op = vals["operating_income"]["current"]
-        ni = vals["net_income"]["current"]
-        assets = vals["assets"]["current"]
-        assets_prior = vals["assets"]["prior"]
-        eq = vals["equity"]["current"]
-        eq_prior = vals["equity"]["prior"]
-        ctrl_eq = vals["controlling_equity"]["current"]
-        ctrl_eq_prior = vals["controlling_equity"]["prior"]
-
-        ratios = {
-            "operating_margin_pct": pct(ratio(op, rev)),
-            "net_margin_pct": pct(ratio(ni, rev)),
-            "current_ratio_pct": pct(ratio(vals["current_assets"]["current"], vals["current_liabilities"]["current"])),
-            "debt_to_equity_pct": pct(ratio(vals["liabilities"]["current"], eq)),
-            "equity_ratio_pct": pct(ratio(eq, assets)),
-            "cash_ratio_pct": pct(ratio(vals["cash"]["current"], vals["current_liabilities"]["current"])),
-            "roa_pct": pct(ratio(ni, (assets + assets_prior) / 2 if assets is not None and assets_prior is not None else assets)),
-            "roe_pct": pct(ratio(
-                ni,
-                (ctrl_eq + ctrl_eq_prior) / 2
-                if ctrl_eq is not None and ctrl_eq_prior is not None
-                else (ctrl_eq if ctrl_eq is not None else eq)
-            )),
-            "revenue_growth_pct": pct(ratio(
-                rev - vals["revenue"]["prior"],
-                abs(vals["revenue"]["prior"])
-            )) if rev is not None and vals["revenue"]["prior"] not in (None, 0) else None,
-            "operating_income_growth_pct": pct(ratio(
-                op - vals["operating_income"]["prior"],
-                abs(vals["operating_income"]["prior"])
-            )) if op is not None and vals["operating_income"]["prior"] not in (None, 0) else None,
-        }
-
-        metrics[basis] = {"values": vals, "ratios": ratios}
-
-    return {
-        "company": CONFIG["company_name"],
-        "company_en": CONFIG["company_name_en"],
-        "stock_code": STOCK_CODE,
-        "business_year": int(year),
-        "report_code": REPORT_CODE,
-        "report_name": filing.get("report_nm"),
-        "receipt_no": filing.get("rcept_no"),
-        "receipt_date": filing.get("rcept_dt"),
-        "basis_default": CONFIG["default_basis"],
-        "source": "OpenDART",
-        "source_url": f"https://opendart.fss.or.kr/",
-        "metrics": metrics,
-        "generated_at": datetime.now(KST).isoformat(),
-    }
-
+def load_legacy():
+    p = LEGACY / "legacy_financials.csv"
+    if not p.exists():
+        return []
+    try:
+        return pd.read_csv(p).to_dict("records")
+    except Exception:
+        return []
 
 def main():
-    corp_code, corp_name = resolve_corp_code()
-    filing = find_latest_annual_report(corp_code)
-    year = int(filing["rcept_dt"][:4]) - 1
-
-    # Save metadata so the repository shows what was collected.
-    metadata = {
-        "corp_code": corp_code,
-        "corp_name": corp_name,
-        "stock_code": STOCK_CODE,
-        "latest_annual_filing": filing,
+    corp, name = resolve_corp()
+    records = []
+    now = datetime.now(KST)
+    for year in range(START, now.year + 1):
+        for code in CODES.values():
+            try:
+                df = fetch_financials(corp, year, code)
+                if not df.empty:
+                    records.append(snapshot(df, year, code))
+            except RuntimeError as e:
+                if "013" not in str(e):
+                    print(f"WARN {year} {code}: {e}")
+    annual = [r for r in records if r["period"] == "annual"]
+    half = [r for r in records if r["period"] == "half_year"]
+    quarterly = [r for r in records if r["period"].startswith("quarterly")]
+    legacy = load_legacy()
+    out = {
+      "company": name, "company_en": CFG["company_name_en"], "stock_code": STOCK,
+      "corp_code": corp, "generated_at": now.isoformat(),
+      "api_coverage": "2015-present",
+      "legacy_coverage": "2010-2014 when legacy/legacy_financials.csv is supplied",
+      "annual": annual, "half_year": half, "quarterly": quarterly, "legacy": legacy
     }
-    (RAW / "latest_filing.json").write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-    download_original_document(filing["rcept_no"])
-
-    # The latest annual report can be filed early in the following year.
-    # The report's business year is generally filing year - 1.
-    df_cfs = fetch_financials(corp_code, year, "CFS")
-    df_ofs = fetch_financials(corp_code, year, "OFS")
-
-    snapshot = build_snapshot(df_cfs, df_ofs, year, filing)
-
-    # Append a compact history record.
-    history_file = PROCESSED / "history.json"
-    history = []
-    if history_file.exists():
-        history = json.loads(history_file.read_text(encoding="utf-8"))
-    history = [h for h in history if not (
-        h.get("business_year") == snapshot["business_year"]
-        and h.get("receipt_no") == snapshot["receipt_no"]
-    )]
-    history.append(snapshot)
-    history.sort(key=lambda x: (x["business_year"], x["receipt_no"]))
-
-    (PROCESSED / "dashboard.json").write_text(
-        json.dumps(snapshot, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    history_file.write_text(
-        json.dumps(history, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-    print(json.dumps({
-        "status": "ok",
-        "corp_code": corp_code,
-        "filing": filing,
-        "business_year": year,
-        "dashboard": str(PROCESSED / "dashboard.json"),
-    }, ensure_ascii=False, indent=2))
-
+    (PROC/"dashboard.json").write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    (PROC/"last_update.json").write_text(
+      json.dumps({"updated_at":now.isoformat(),"records":len(records),"legacy_records":len(legacy)},
+                 ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"status":"ok","records":len(records),"legacy_records":len(legacy)}, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()
