@@ -1,0 +1,14 @@
+{
+  "company": "LG전자",
+  "company_en": "LG Electronics",
+  "stock_code": "066570",
+  "corp_code": "",
+  "generated_at": "",
+  "requested_coverage": "2010-present",
+  "api_coverage": "2015-present",
+  "legacy_coverage": "2010-2014 only when verified legacy_financials.csv is supplied",
+  "annual": [],
+  "half_year": [],
+  "quarterly": [],
+  "legacy": []
+}
