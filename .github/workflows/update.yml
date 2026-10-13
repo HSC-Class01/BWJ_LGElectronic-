@@ -8,7 +8,10 @@ on:
     paths-ignore:
       - 'data/**'
       - 'legacy/**'
-      - 'docs/data/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'GITHUB_SETUP.md'
+      - '.github/workflows/**'
 permissions:
   contents: write
   pages: write
@@ -69,7 +72,7 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: docs
       - name: Deploy GitHub Pages
