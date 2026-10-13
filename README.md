@@ -28,7 +28,11 @@ GitHub → Settings → Secrets and variables → Actions → New repository sec
 
 ## GitHub Pages
 Dashboard: https://hsc-class01.github.io/BWJ_LGElectronic-/
-Settings → Pages → Deploy from a branch → main → /docs
+Settings → Pages → Build and deployment → Source: **GitHub Actions**
+
+- `.github/workflows/deploy-pages.yml`: deploys dashboard/site changes without rerunning the DART crawler.
+- `.github/workflows/update.yml`: collects and analyzes OpenDART data monthly, then republishes the dashboard.
+- The deployment artifact includes `docs/data/processed/dashboard.json`, which the dashboard loads from its site-relative path.
 
 ## 2010–2014 데이터
 OpenDART의 단일회사 전체 재무제표 API는 공식 개발가이드상 2015년 이후 사업연도부터 재무정보를 제공합니다. 따라서 2010–2014는 검증된 DART 원문 수치를 legacy/legacy_financials.csv로 제공했을 때만 통합합니다. 임의의 과거 수치를 생성하지 않습니다.
