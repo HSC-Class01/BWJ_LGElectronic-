@@ -1,0 +1,56 @@
+name: Deploy LG Electronics dashboard
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: github-pages-site
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Prepare dashboard data
+        run: |
+          python - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          source = Path("data/processed/dashboard.json")
+          if not source.is_file():
+              raise SystemExit("Missing data/processed/dashboard.json")
+          data = json.loads(source.read_text(encoding="utf-8"))
+          if not isinstance(data, dict) or not isinstance(data.get("annual"), list) or not data["annual"]:
+              raise SystemExit("Dashboard JSON is invalid or has no annual observations")
+
+          target = Path("docs/data/processed")
+          target.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(source, target / "dashboard.json")
+          last_update = Path("data/processed/last_update.json")
+          if last_update.is_file():
+              shutil.copy2(last_update, target / "last_update.json")
+          print(f"Prepared dashboard JSON: {len(data['annual'])} annual rows, {len(data.get('half_year', []))} half-year rows, {len(data.get('quarterly', []))} quarterly rows")
+          PY
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
